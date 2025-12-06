@@ -1,7 +1,6 @@
-
-import React, { useState, useRef } from 'react';
+mport React, { useState, useRef, useEffect } from 'react';
 import { AppData, TechUser } from '../App';
-import { TrashIcon, PlusIcon, DownloadIcon, UserIcon, TruckIcon, FileTextIcon, FilterIcon, EditIcon, SaveIcon, XIcon, LockIcon, UploadIcon } from './icons';
+import { TrashIcon, PlusIcon, DownloadIcon, UserIcon, TruckIcon, FileTextIcon, FilterIcon, EditIcon, SaveIcon, XIcon, LockIcon, UploadIcon, CloudIcon } from './icons';
 
 interface AdminPanelProps {
   data: AppData;
@@ -25,6 +24,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
   // Password Settings State (Admin Only)
   const [newAdminPwd, setNewAdminPwd] = useState(data.adminPassword || 'admin');
   const [pwdMsg, setPwdMsg] = useState('');
+  
+  // Firebase Config State
+  const [firebaseConfigInput, setFirebaseConfigInput] = useState('');
 
   // Filters
   const [filterTech, setFilterTech] = useState('');
@@ -33,6 +35,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
 
   // File Upload Ref
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (data.firebaseConfig) {
+        setFirebaseConfigInput(data.firebaseConfig);
+    }
+  }, [data.firebaseConfig]);
 
   const handleAdd = (type: 'techs' | 'projects' | 'vehicles') => {
     if (!newItemName.trim()) return;
@@ -54,18 +62,33 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
     setNewTechPwd('');
   };
 
-  const handleDelete = (item: any, type: 'techs' | 'projects' | 'vehicles') => {
-    // For techs, item is object. For others, string.
-    const name = type === 'techs' ? (item as TechUser).name : item as string;
+  // Robust Delete Function - Receives type explicitly to avoid state closures issues
+  const handleDelete = (type: 'techs' | 'projects' | 'vehicles', index: number) => {
+    let itemName = "Elemento";
     
-    if (window.confirm(`¿Borrar ${name}?`)) {
-      setData(prev => {
-        if (type === 'techs') return { ...prev, technicians: prev.technicians.filter(t => t.id !== (item as TechUser).id) };
-        if (type === 'projects') return { ...prev, projects: prev.projects.filter(p => p !== item) };
-        if (type === 'vehicles') return { ...prev, vehicles: prev.vehicles.filter(v => v !== item) };
-        return prev;
-      });
+    // Safely get name for display
+    if (type === 'techs' && data.technicians[index]) itemName = data.technicians[index].name;
+    else if (type === 'projects' && data.projects[index]) itemName = data.projects[index];
+    else if (type === 'vehicles' && data.vehicles[index]) itemName = data.vehicles[index];
+
+    // Native confirm dialog
+    if (!window.confirm(`¿Eliminar "${itemName}"? Esta acción no se puede deshacer.`)) {
+        return;
     }
+
+    // Direct state update based on type
+    setData(prev => {
+      if (type === 'techs') {
+        return { ...prev, technicians: prev.technicians.filter((_, i) => i !== index) };
+      }
+      if (type === 'projects') {
+        return { ...prev, projects: prev.projects.filter((_, i) => i !== index) };
+      }
+      if (type === 'vehicles') {
+        return { ...prev, vehicles: prev.vehicles.filter((_, i) => i !== index) };
+      }
+      return prev;
+    });
   };
 
   const startEditing = (index: number, item: any, type: 'techs' | 'projects' | 'vehicles') => {
@@ -129,8 +152,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
     setData(prev => ({
       ...prev,
       adminPassword: newAdminPwd,
+      firebaseConfig: firebaseConfigInput // Save cloud config
     }));
-    setPwdMsg('Contraseña de administrador actualizada.');
+    setPwdMsg('Configuración actualizada.');
     setTimeout(() => setPwdMsg(''), 3000);
   };
 
@@ -411,10 +435,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
              <div className="space-y-2">
                {(tab === 'techs' ? data.technicians : tab === 'projects' ? data.projects : data.vehicles).map((item, idx) => {
                  const displayValue = tab === 'techs' ? (item as TechUser).name : (item as string);
-                 const idKey = tab === 'techs' ? (item as TechUser).id : idx;
+                 // Stable Key Generation
+                 const key = tab === 'techs' ? (item as TechUser).id : `${displayValue}-${idx}`;
 
                  return (
-                   <div key={idKey} className="flex justify-between items-center p-3 bg-gray-900 rounded-lg border border-gray-700 min-h-[60px] hover:border-brand-teal/50 transition-colors">
+                   <div key={key} className="flex justify-between items-center p-3 bg-gray-900 rounded-lg border border-gray-700 min-h-[60px] hover:border-brand-teal/50 transition-colors">
                       {editingIndex === idx ? (
                         <div className="flex w-full gap-2 items-center">
                           <input 
@@ -449,14 +474,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
                               className="text-brand-teal hover:text-teal-400 p-2"
                               title="Editar"
                             >
-                              <EditIcon className="w-4 h-4" />
+                              <EditIcon className="w-4 h-4 pointer-events-none" />
                             </button>
                             <button 
-                              onClick={() => handleDelete(item, tab as any)}
-                              className="text-red-400 hover:text-red-300 p-2"
+                              type="button"
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDelete(tab as 'techs' | 'projects' | 'vehicles', idx);
+                              }}
+                              className="text-red-400 hover:text-red-300 p-2 cursor-pointer relative z-10"
                               title="Borrar"
                             >
-                              <TrashIcon className="w-4 h-4" />
+                              <TrashIcon className="w-4 h-4 pointer-events-none" />
                             </button>
                           </div>
                         </>
@@ -493,15 +522,32 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
                 />
               </div>
 
-              <div className="bg-brand-teal/10 p-4 rounded-xl border border-brand-teal/30 text-sm text-teal-200">
-                <p>ℹ️ Las contraseñas de los técnicos se gestionan individualmente en la pestaña "Técnicos".</p>
+              {/* Cloud Sync Section */}
+              <div className="bg-gray-900 p-6 rounded-xl border border-gray-700 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <CloudIcon className="w-24 h-24 text-white" />
+                </div>
+                <div className="flex items-center gap-3 mb-4 text-brand-lime">
+                   <CloudIcon className="w-6 h-6"/>
+                   <h4 className="font-bold">Sincronización en la Nube (Firebase)</h4>
+                </div>
+                <p className="text-xs text-gray-400 mb-3">
+                    Pega aquí la configuración JSON de tu proyecto Firebase para sincronizar datos entre dispositivos.
+                </p>
+                <textarea 
+                  rows={6}
+                  value={firebaseConfigInput}
+                  onChange={e => setFirebaseConfigInput(e.target.value)}
+                  placeholder='const firebaseConfig = { ... }'
+                  className="w-full bg-gray-950 border border-gray-600 rounded-lg p-3 text-gray-300 text-xs font-mono focus:ring-2 focus:ring-brand-lime outline-none mb-2"
+                />
               </div>
 
               <button 
                 onClick={savePasswords}
                 className="w-full bg-brand-teal hover:bg-teal-600 text-white font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
               >
-                <SaveIcon className="w-5 h-5" /> Guardar Configuración
+                <SaveIcon className="w-5 h-5" /> Conectar y Guardar
               </button>
 
               {pwdMsg && (
@@ -518,3 +564,4 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ data, setData }) => {
 };
 
 export default AdminPanel;
+
