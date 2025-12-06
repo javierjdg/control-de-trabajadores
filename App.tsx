@@ -1,10 +1,13 @@
-
 import React, { useState, useEffect } from 'react';
 import Login from './components/Login';
 import ReportForm from './components/ReportForm';
 import AdminPanel from './components/AdminPanel';
+import TechDashboard from './components/TechDashboard';
 import { Logo } from './components/Logo';
-import { UserIcon, TruckIcon, FileTextIcon, SettingsIcon, LogOutIcon, PlusIcon, EditIcon } from './components/icons';
+import { UserIcon, LogOutIcon, WifiIcon, WifiOffIcon } from './components/icons';
+// Firebase imports
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 // Types
 export interface WorkReport {
@@ -39,6 +42,7 @@ export interface AppData {
   vehicles: string[];
   reports: WorkReport[];
   adminPassword?: string;
+  firebaseConfig?: string; // Stored as JSON string
 }
 
 const INITIAL_DATA: AppData = {
@@ -50,7 +54,8 @@ const INITIAL_DATA: AppData = {
   projects: ['10001 - Mantenimiento Central', '20002 - Reforma Oficina', '30003 - Avería Nave B'],
   vehicles: ['Furgoneta 1 (1234-BBC)', 'Coche Taller (5678-DEF)', 'Furgoneta 2 (9012-GHI)'],
   reports: [],
-  adminPassword: 'admin'
+  adminPassword: 'admin',
+  firebaseConfig: ''
 };
 
 const App: React.FC = () => {
@@ -58,6 +63,8 @@ const App: React.FC = () => {
   const [userRole, setUserRole] = useState<'admin' | 'tech' | null>(null);
   const [currentUser, setCurrentUser] = useState<string>('');
   const [editingReport, setEditingReport] = useState<WorkReport | null>(null);
+  const [isCloudConnected, setIsCloudConnected] = useState(false);
+  const [dbStatus, setDbStatus] = useState<'local' | 'cloud'>('local');
   
   // "Database" state
   const [data, setData] = useState<AppData>(() => {
@@ -86,9 +93,64 @@ const App: React.FC = () => {
     return INITIAL_DATA;
   });
 
+  // Effect to Initialize Firebase if config exists
   useEffect(() => {
+    if (data.firebaseConfig) {
+      try {
+        const config = JSON.parse(data.firebaseConfig);
+        const app = !getApps().length ? initializeApp(config) : getApp();
+        const db = getFirestore(app);
+        
+        setIsCloudConnected(true);
+        setDbStatus('cloud');
+
+        // Subscribe to real-time updates
+        const unsub = onSnapshot(doc(db, "jdg_teleco", "main_db"), (doc) => {
+            if (doc.exists()) {
+                const cloudData = doc.data() as AppData;
+                // Preserve the local config string, but update everything else
+                setData(prev => ({
+                    ...cloudData,
+                    firebaseConfig: prev.firebaseConfig 
+                }));
+            }
+        }, (err) => {
+            console.error("Firebase sync error:", err);
+            setIsCloudConnected(false);
+            setDbStatus('local');
+        });
+
+        return () => unsub();
+      } catch (e) {
+        console.error("Invalid Firebase Config", e);
+        setIsCloudConnected(false);
+        setDbStatus('local');
+      }
+    } else {
+        setDbStatus('local');
+    }
+  }, [data.firebaseConfig]);
+
+  // Effect to Save Data (Local or Cloud)
+  useEffect(() => {
+    // Always save to local storage as backup/offline cache
     localStorage.setItem('workerApp_db', JSON.stringify(data));
-  }, [data]);
+
+    // If connected to cloud, push updates
+    if (isCloudConnected && data.firebaseConfig) {
+        try {
+            const config = JSON.parse(data.firebaseConfig);
+            const app = !getApps().length ? initializeApp(config) : getApp();
+            const db = getFirestore(app);
+            // We don't want to trigger infinite loops, but setData is usually safe.
+            // In a real app we'd check dirty flags. Here we just push.
+            // We use setDoc with merge:true usually, but here we want the state to be the source of truth
+            setDoc(doc(db, "jdg_teleco", "main_db"), data).catch(err => console.error("Push error", err));
+        } catch(e) {
+            console.error("Cloud push failed", e);
+        }
+    }
+  }, [data, isCloudConnected]);
 
   const handleLogin = (role: 'admin' | 'tech', username?: string) => {
     setUserRole(role);
@@ -154,9 +216,20 @@ const App: React.FC = () => {
               </div>
               <div>
                 <h1 className="font-bold text-lg leading-tight text-white hidden sm:block">Control de Obras</h1>
-                <p className="text-xs text-brand-lime">
-                  {userRole === 'admin' ? 'ADMINISTRADOR' : `TÉCNICO: ${currentUser.toUpperCase()}`}
-                </p>
+                <div className="flex items-center gap-2">
+                    <p className="text-xs text-brand-lime">
+                    {userRole === 'admin' ? 'ADMINISTRADOR' : `TÉCNICO: ${currentUser.toUpperCase()}`}
+                    </p>
+                    {dbStatus === 'cloud' ? (
+                        <span className="flex items-center gap-1 text-[10px] text-green-400 bg-green-900/30 px-2 py-0.5 rounded-full border border-green-800">
+                            <WifiIcon className="w-3 h-3" /> Cloud
+                        </span>
+                    ) : (
+                        <span className="flex items-center gap-1 text-[10px] text-gray-400 bg-gray-800 px-2 py-0.5 rounded-full border border-gray-700">
+                            <WifiOffIcon className="w-3 h-3" /> Local
+                        </span>
+                    )}
+                </div>
               </div>
             </div>
             <button 
@@ -179,49 +252,11 @@ const App: React.FC = () => {
         )}
 
         {view === 'dashboard' && (
-          <div className="space-y-6 animate-fade-in">
-            <button
-              onClick={startNewReport}
-              className="w-full bg-gradient-to-r from-brand-teal to-teal-600 hover:from-teal-500 hover:to-teal-400 text-white p-6 rounded-2xl shadow-lg transform transition active:scale-95 flex flex-col items-center justify-center gap-3 border border-teal-500/30"
-            >
-              <PlusIcon className="w-12 h-12 text-brand-lime" />
-              <span className="text-xl font-bold">Nuevo Parte de Trabajo</span>
-            </button>
-
-            <div>
-              <h3 className="text-gray-400 font-medium mb-3 uppercase text-sm tracking-wider flex items-center gap-2">
-                <FileTextIcon className="w-4 h-4 text-brand-lime" /> Mis Últimos Partes
-              </h3>
-              <div className="space-y-3">
-                {data.reports.filter(r => r.technician === currentUser).slice(0, 5).map(report => (
-                  <div key={report.id} className="bg-brand-panel p-4 rounded-xl border border-gray-700 flex justify-between items-center group hover:border-brand-teal/50 transition-colors">
-                    <div>
-                      <div className="font-bold text-brand-lime">{report.date}</div>
-                      <div className="text-sm text-gray-300">Obra: <span className="text-white">{report.projectNum}</span></div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-right">
-                        <div className="text-xs text-gray-500">{report.startTime} - {report.endTime}</div>
-                        <div className="text-xs bg-gray-800 px-2 py-1 rounded mt-1 inline-block text-gray-300">
-                          {report.vehicle.split('(')[0]}
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => startEditReport(report)}
-                        className="p-2 bg-gray-800 hover:bg-brand-teal rounded-lg text-gray-300 hover:text-white transition-colors border border-gray-700"
-                        title="Editar Parte"
-                      >
-                        <EditIcon className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {data.reports.filter(r => r.technician === currentUser).length === 0 && (
-                  <p className="text-gray-500 text-center py-4 bg-brand-panel rounded-xl border border-gray-800 border-dashed">No hay partes recientes.</p>
-                )}
-              </div>
-            </div>
-          </div>
+          <TechDashboard 
+            reports={data.reports.filter(r => r.technician === currentUser)}
+            onNewReport={startNewReport}
+            onEditReport={startEditReport}
+          />
         )}
 
         {view === 'form' && (
